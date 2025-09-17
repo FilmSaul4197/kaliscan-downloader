@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Coroutine, Dict, Iterable, List, Optional, TYPE_CHECKING
+from typing import Any, Coroutine, Dict, Iterable, List, Optional, TYPE_CHECKING
 
 import typer
 from rich.console import Console
@@ -21,6 +21,13 @@ from downloader import ChapterDownloader, DownloadError
 from models import Chapter, Manga, Page
 from scraper import ScraperError, scrape_manga, scrape_pages
 from utils import get_logger
+from converter import (
+    convert_to_cbz,
+    convert_to_pdf,
+    get_image_files,
+    cleanup_images,
+    ConversionError,
+)
 
 if TYPE_CHECKING:  # pragma: no cover
     from playwright.async_api import BrowserContext
@@ -174,14 +181,22 @@ async def interactive_async(
     retries = typer.prompt("Retry attempts", default=retries, type=int)
     backoff = typer.prompt("Retry backoff multiplier", default=backoff, type=float)
 
+    conversion_format = typer.prompt(
+        "Convert to PDF/CBZ (optional, leave blank for none)", default="", show_choices=False
+    ).lower()
+    delete_after_conversion = False
+    if conversion_format in {"pdf", "cbz"}:
+        delete_after_conversion = typer.confirm("Delete original images after conversion?", default=False)
+
     if not typer.confirm("Start download now?", default=True):
         typer.secho("Aborted.", fg=typer.colors.YELLOW)
         raise typer.Exit(code=0)
 
     console.print(f"[bold green]Downloading {len(selected)} chapter(s) from {manga.title}[/bold green]")
 
+    downloaded_chapters = []
     try:
-        await _run_download(
+        downloaded_chapters = await _run_download(
             manga,
             selected,
             output_path,
@@ -195,6 +210,11 @@ async def interactive_async(
         raise typer.Exit(code=1) from exc
 
     typer.secho("Download complete.", fg=typer.colors.GREEN)
+
+    if conversion_format and downloaded_chapters:
+        _perform_conversion(
+            manga, downloaded_chapters, output_path, conversion_format, delete_after_conversion
+        )
 
 
 def _display_manga(manga: Manga) -> None:
@@ -324,7 +344,9 @@ async def _run_download(
     image_workers: int,
     retries: int,
     backoff: float,
-) -> None:
+) -> List[Dict[str, Any]]:
+    downloaded_chapters_info = []
+
     progress = Progress(
         SpinnerColumn(),
         TextColumn("{task.description}"),
@@ -361,6 +383,9 @@ async def _run_download(
             if task_id is not None:
                 total = progress.tasks[task_id].total or len(ch.pages)
                 progress.update(task_id, completed=total)
+            downloaded_chapters_info.append(
+                {"chapter": ch, "path": payload["destination"]}
+            )
         elif event == "chapter_failed":
             ch = payload["chapter"]
             typer.secho(f"Chapter failed: {ch.title}", fg=typer.colors.RED)
@@ -378,3 +403,46 @@ async def _run_download(
             progress_callback=handle_progress,
         ) as downloader:
             await downloader.download(manga, chapters, load_pages)
+
+    return downloaded_chapters_info
+
+
+def _perform_conversion(
+    manga: Manga,
+    downloaded_chapters: List[Dict[str, Any]],
+    output_dir: Path,
+    format: str,
+    cleanup: bool,
+) -> None:
+    console.print(f"\n[bold]Converting {len(downloaded_chapters)} chapter(s) to {format.upper()}[/bold]")
+    for item in downloaded_chapters:
+        chapter: Chapter = item["chapter"]
+        chapter_path: Path = item["path"]
+        
+        try:
+            image_files = get_image_files(chapter_path)
+            if not image_files:
+                console.print(f"[yellow]No images found for chapter {chapter.title}, skipping conversion.[/yellow]")
+                continue
+
+            output_filename = f"{chapter_path.name}.{format}"
+            output_file = output_dir / manga.id / output_filename
+            
+            console.print(f"Converting chapter '{chapter.title}' to {output_filename}...")
+            
+            if format == "pdf":
+                convert_to_pdf(image_files, output_file)
+            elif format == "cbz":
+                convert_to_cbz(image_files, output_file)
+
+            if cleanup:
+                console.print(f"  -> Deleting original images in {chapter_path.name}")
+                cleanup_images(image_files)
+                # Try to remove the directory if it's empty
+                try:
+                    chapter_path.rmdir()
+                except OSError:
+                    pass # Directory not empty, do nothing
+
+        except (ConversionError, OSError) as exc:
+            console.print(f"[red]Error converting chapter {chapter.title}: {exc}[/red]")
