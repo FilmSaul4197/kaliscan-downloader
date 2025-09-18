@@ -15,6 +15,8 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QSizePolicy,
     QSpinBox,
+    QCheckBox,
+    QComboBox,
     QStatusBar,
     QVBoxLayout,
     QWidget,
@@ -22,7 +24,7 @@ from PyQt6.QtWidgets import (
 
 from models import Manga
 from gui_widgets import ChapterTableWidget, PrimaryButton, ProgressListWidget, SecondaryButton, SectionCard
-from gui_workers import DownloadWorker, ScrapeWorker
+from gui_workers import ConvertWorker, DownloadWorker, ScrapeWorker
 from styles import apply_theme, body_font, headline_font
 
 
@@ -34,6 +36,7 @@ class MainWindow(QMainWindow):
         self._manga: Optional[Manga] = None
         self._scrape_worker: Optional[ScrapeWorker] = None
         self._download_worker: Optional[DownloadWorker] = None
+        self._convert_worker: Optional[ConvertWorker] = None
         self._download_results: Optional[list[dict[str, object]]] = None
         self._output_dir = Path.cwd() / 'downloads'
         self._build_ui()
@@ -87,6 +90,15 @@ class MainWindow(QMainWindow):
         options_layout.addRow('Chapter workers', self.chapter_workers)
         options_layout.addRow('Image workers', self.image_workers)
         card_layout.addLayout(options_layout)
+
+        conversion_layout = QFormLayout()
+        conversion_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.conversion_format = QComboBox()
+        self.conversion_format.addItems(['None', 'PDF', 'CBZ'])
+        self.delete_after_conversion = QCheckBox('Delete original images after conversion')
+        conversion_layout.addRow('Convert to', self.conversion_format)
+        conversion_layout.addRow(self.delete_after_conversion)
+        card_layout.addLayout(conversion_layout)
 
         self.download_button = PrimaryButton('Download Selected')
         self.download_button.clicked.connect(self._start_download)
@@ -265,6 +277,7 @@ class MainWindow(QMainWindow):
     def _on_download_finished(self, results: list[dict[str, object]]) -> None:
         self._download_results = results
         QMessageBox.information(self, 'Download complete', f'Downloaded {len(results)} chapter(s).')
+        self._start_conversion()
 
     def closeEvent(self, a0: QCloseEvent | None) -> None:
         if self._scrape_worker and self._scrape_worker.isRunning():
@@ -275,6 +288,27 @@ class MainWindow(QMainWindow):
             self._download_worker.wait(1000)
         if a0:
             a0.accept()
+
+    def _start_conversion(self) -> None:
+        if not self._manga or not self._download_results:
+            return
+
+        format = self.conversion_format.currentText().lower()
+        if format == 'none':
+            return
+
+        cleanup = self.delete_after_conversion.isChecked()
+        worker = ConvertWorker(self._manga, self._download_results, self._output_dir, format, cleanup)
+        worker.finished.connect(self._on_conversion_finished)
+        worker.failed.connect(self._on_conversion_failed)
+        self._convert_worker = worker
+        worker.start()
+
+    def _on_conversion_finished(self) -> None:
+        QMessageBox.information(self, 'Conversion complete', 'Finished converting chapters.')
+
+    def _on_conversion_failed(self, message: str) -> None:
+        QMessageBox.critical(self, 'Conversion failed', message)
 
 
 def launch_gui(app) -> MainWindow:

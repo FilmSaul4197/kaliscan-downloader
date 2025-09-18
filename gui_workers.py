@@ -10,6 +10,13 @@ from PyQt6.QtCore import QObject, QThread, pyqtSignal
 from downloader import ChapterDownloader, DownloadError
 from models import Chapter, Manga
 from scraper import ScraperError, scrape_manga, scrape_pages
+from converter import (
+    convert_to_cbz,
+    convert_to_pdf,
+    get_image_files,
+    cleanup_images,
+    ConversionError,
+)
 
 
 class ScrapeWorker(QThread):
@@ -127,3 +134,53 @@ class DownloadWorker(QThread):
             error = payload.get('error')
             message = str(error) if error is not None else 'Chapter download failed'
             self.chapter_failed.emit(chapter, message)
+
+
+class ConvertWorker(QThread):
+    finished = pyqtSignal()
+    failed = pyqtSignal(str)
+
+    def __init__(
+        self,
+        manga: Manga,
+        downloaded_chapters: List[dict[str, object]],
+        output_dir: Path,
+        format: str,
+        cleanup: bool,
+        parent: Optional[QObject] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._manga = manga
+        self._downloaded_chapters = downloaded_chapters
+        self._output_dir = output_dir
+        self._format = format
+        self._cleanup = cleanup
+
+    def run(self) -> None:
+        try:
+            for item in self._downloaded_chapters:
+                chapter: Chapter = item["chapter"]  # type: ignore
+                chapter_path: Path = item["path"]  # type: ignore
+                
+                image_files = get_image_files(chapter_path)
+                if not image_files:
+                    continue
+
+                output_filename = f"{chapter_path.name}.{self._format}"
+                output_file = self._output_dir / self._manga.id / output_filename
+                
+                if self._format == "pdf":
+                    convert_to_pdf(image_files, output_file)
+                elif self._format == "cbz":
+                    convert_to_cbz(image_files, output_file)
+
+                if self._cleanup:
+                    cleanup_images(image_files)
+                    try:
+                        chapter_path.rmdir()
+                    except OSError:
+                        pass
+        except (ConversionError, OSError) as exc:
+            self.failed.emit(str(exc))
+        else:
+            self.finished.emit()
