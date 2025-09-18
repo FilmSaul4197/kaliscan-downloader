@@ -6,8 +6,6 @@
 
 A powerful and flexible downloader for the Kaliscan manga website, featuring both a rich graphical user interface (GUI) and a command-line interface (CLI). Scrape manga metadata, download chapters, and convert them to PDF or CBZ formats with ease.
 
-This project is hosted at [https://github.com/Yui007/kaliscan-downloader](https://github.com/Yui007/kaliscan-downloader).
-
 ## Features
 
 -   **Dual Interface**: Choose between a user-friendly GUI or a scriptable CLI.

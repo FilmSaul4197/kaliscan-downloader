@@ -85,12 +85,12 @@ QPushButton {{
 }}
 
 QPushButton#PrimaryButton {{
-    background-color: {PRIMARY_COLOR};
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #6366F1, stop:1 #818CF8);
     color: {PRIMARY_TEXT};
 }}
 
 QPushButton#PrimaryButton:hover {{
-    background-color: #4F46E5;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #4F46E5, stop:1 #6366F1);
 }}
 
 QPushButton#PrimaryButton:disabled {{
@@ -105,6 +105,7 @@ QPushButton#SecondaryButton {{
 
 QPushButton#SecondaryButton:hover {{
     background-color: rgba(148, 163, 184, 0.25);
+    border: 1px solid rgba(148, 163, 184, 0.3);
 }}
 """
 
@@ -126,13 +127,13 @@ def apply_theme(app: QApplication) -> None:
     app.setStyleSheet(_BASE_STYLESHEET)
 
 
-def headline_font(size: int = 14, weight: int = QFont.Weight.DemiBold) -> QFont:
+def headline_font(size: int = 16, weight: int = QFont.Weight.Bold) -> QFont:
     font = QFont(FONT_FAMILY, size)
     font.setWeight(weight)
     return font
 
 
-def body_font(size: int = 10) -> QFont:
+def body_font(size: int = 11) -> QFont:
     return QFont(FONT_FAMILY, size)
 
 
