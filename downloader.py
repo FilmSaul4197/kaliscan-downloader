@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import mimetypes
+from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Callable, Coroutine, Dict, Iterable, List, Optional
+from typing import Any, AsyncIterator, Callable, Coroutine, Dict, Iterable, List, Optional
 from urllib.parse import urlparse
 
 from playwright.async_api import Browser, BrowserContext, async_playwright
@@ -65,19 +66,21 @@ class ImageDownloader:
         if not pages:
             return
 
-        tasks = [
-            self._download_page_with_retry(page, destination, context)
-            for page in pages
-            if page.index not in already_downloaded
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        tasks = []
+        pages_in_flight = []
+        for page in pages:
+            if page.index not in already_downloaded:
+                tasks.append(asyncio.create_task(self._download_page_with_retry(page, destination, context)))
+                pages_in_flight.append(page)
 
-        for page, result in zip(pages, results):
-            if isinstance(result, Path):
+        for i, future in enumerate(asyncio.as_completed(tasks)):
+            page = pages_in_flight[i]
+            try:
+                result = await future
                 self._notify_page_completed(chapter, page, result)
-            elif isinstance(result, Exception):
-                self._notify_page_failed(chapter, page, result)
-                raise DownloadError(f"Page download failed for {page.url}") from result
+            except Exception as exc:
+                self._notify_page_failed(chapter, page, exc)
+                _logger.error("Page download failed for %s: %s", page.url, exc)
 
     async def _download_page_with_retry(
         self, page: Page, destination: Path, context: BrowserContext
@@ -169,16 +172,8 @@ class ChapterDownloader:
         if self._playwright:
             await self._playwright.stop()
 
-    async def download(
-        self,
-        manga: Manga,
-        chapters: Iterable[Chapter],
-        page_loader: Callable[[Chapter, BrowserContext], Coroutine[Any, Any, List[Page]]],
-    ) -> None:
-        chapter_list = list(chapters)
-        if not chapter_list:
-            return
-
+    @asynccontextmanager
+    async def get_browser_context(self) -> AsyncIterator[BrowserContext]:
         if not self._browser:
             raise DownloadError("Browser is not initialized.")
         context = await self._browser.new_context(
@@ -187,31 +182,41 @@ class ChapterDownloader:
             viewport={"width": 1280, "height": 800},
         )
         try:
+            yield context
+        finally:
+            await context.close()
+
+    async def download(
+        self,
+        manga: Manga,
+        chapters: Iterable[Chapter],
+    ) -> None:
+        chapter_list = list(chapters)
+        if not chapter_list:
+            return
+
+        async with self.get_browser_context() as context:
             semaphore = asyncio.Semaphore(self.max_chapter_workers)
             tasks = [
-                self._download_chapter_with_semaphore(manga, chapter, page_loader, context, semaphore)
+                self._download_chapter_with_semaphore(manga, chapter, context, semaphore)
                 for chapter in chapter_list
             ]
             await asyncio.gather(*tasks)
-        finally:
-            await context.close()
 
     async def _download_chapter_with_semaphore(
         self,
         manga: Manga,
         chapter: Chapter,
-        page_loader: Callable[[Chapter, BrowserContext], Coroutine[Any, Any, List[Page]]],
         context: BrowserContext,
         semaphore: asyncio.Semaphore,
     ) -> None:
         async with semaphore:
-            await self._download_chapter(manga, chapter, page_loader, context)
+            await self._download_chapter(manga, chapter, context)
 
     async def _download_chapter(
         self,
         manga: Manga,
         chapter: Chapter,
-        page_loader: Callable[[Chapter, BrowserContext], Coroutine[Any, Any, List[Page]]],
         context: BrowserContext,
     ) -> None:
         label = format_chapter_label(chapter.title, chapter.number)
@@ -219,9 +224,9 @@ class ChapterDownloader:
         self._notify_chapter_started(chapter, destination)
 
         try:
-            pages = await page_loader(chapter, context)
-            chapter.pages = pages
-            await self.image_downloader.download(chapter, pages, destination, context)
+            if not chapter.pages:
+                raise DownloadError(f"Chapter {chapter.title} has no pages to download.")
+            await self.image_downloader.download(chapter, chapter.pages, destination, context)
             self._notify_chapter_completed(chapter, destination)
         except Exception as exc:
             _logger.exception("Chapter download failed for %s", chapter.title)
@@ -249,6 +254,7 @@ class ChapterDownloader:
     def _notify_chapter_failed(self, chapter: Chapter, error: Exception) -> None:
         self.manifest.update_chapter(chapter.id, status="error")
         self._notify("chapter_failed", {"chapter": chapter, "error": error})
+
 
     def _notify(self, event: str, payload: ProgressPayload) -> None:
         if self.progress_callback:
