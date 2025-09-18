@@ -126,8 +126,17 @@ async def scrape_pages(chapter: Chapter, browser_context: BrowserContext) -> Lis
         except Exception:
             _logger.debug("No warning button found on chapter page, continuing...")
 
-        # Wait for chapter images to be present
-        await page.wait_for_selector("div.chapter-image", timeout=15000)
+        # Wait for chapter images to be present and ensure they have started loading
+        try:
+            await page.wait_for_function("""
+                () => {
+                    const images = document.querySelectorAll('div.chapter-image img');
+                    return Array.from(images).some(img => img.src && img.src.length > 0);
+                }
+            """, timeout=20000)
+            _logger.debug("At least one chapter image has a non-empty src attribute.")
+        except Exception:
+            _logger.warning("Timed out waiting for images to have a src attribute. Scraping may fail.")
 
         image_divs = await page.query_selector_all("div.chapter-image")
         if not image_divs:
