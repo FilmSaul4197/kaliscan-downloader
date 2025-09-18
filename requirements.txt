@@ -3,6 +3,7 @@ beautifulsoup4
 lxml
 rich
 typer
+PyQt6
 playwright
 
 Pillow
