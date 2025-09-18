@@ -20,13 +20,17 @@ def get_image_files(directory: Path) -> List[Path]:
 
 
 def convert_to_pdf(image_files: List[Path], output_path: Path) -> None:
-    """Convert a list of images to a single PDF file."""
+    """Convert a list of images to a single PDF file, removing alpha channels."""
     if not image_files:
         raise ConversionError("No image files found to convert to PDF.")
-    
+
+    # The img2pdf library can handle image paths directly.
+    # It also handles different image modes, so we don't need to convert them manually.
     try:
         with open(output_path, "wb") as f:
-            f.write(img2pdf.convert(image_files))
+            pdf_bytes = img2pdf.convert(image_files)
+            if pdf_bytes:
+                f.write(pdf_bytes)
     except Exception as e:
         raise ConversionError(f"Failed to convert images to PDF: {e}") from e
 

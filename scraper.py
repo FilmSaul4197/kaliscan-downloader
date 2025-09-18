@@ -72,21 +72,19 @@ async def scrape_manga(url: str, client: Optional[httpx.AsyncClient] = None) -> 
         last_updated=last_updated,
     )
 
-    chapters = scrape_chapters(url, client=client, soup=soup)
+    chapters = await scrape_chapters(url, client=client, soup=soup)
     manga.chapters = chapters
     return manga
 
 
-def scrape_chapters(
+async def scrape_chapters(
     manga_url: str,
     *,
-    client: Optional[httpx.Client] = None,
+    client: Optional[httpx.AsyncClient] = None,
     soup: Optional[BeautifulSoup] = None,
 ) -> List[Chapter]:
     if soup is None:
-        # This part remains synchronous for now to avoid major refactoring of the CLI part that calls it
-        with httpx.Client(headers=DEFAULT_HEADERS, follow_redirects=True, timeout=30.0) as sync_client:
-            html = sync_client.get(manga_url).text
+        html = await _fetch(manga_url, client)
         soup = BeautifulSoup(html, "lxml")
 
     chapter_links = list(_iter_chapter_links(soup, base_url=manga_url))
@@ -115,37 +113,23 @@ def scrape_chapters(
 async def scrape_pages(chapter: Chapter, browser_context: BrowserContext) -> List[Page]:
     page = await browser_context.new_page()
     try:
-        await page.goto(chapter.url, wait_until="domcontentloaded")
+        await page.goto(chapter.url, wait_until="domcontentloaded", timeout=60000)
 
         # Handle the warning accept button if it appears
         try:
-            await page.wait_for_selector("button.btn.btn-warning", timeout=5000)
+            # Increased timeout for the warning button
+            await page.wait_for_selector("button.btn.btn-warning", timeout=10000)
             await page.click("button.btn.btn-warning")
-            await page.wait_for_timeout(1000)  # Wait for any potential redirect
+            # Wait for any potential redirect or content change after clicking
+            await page.wait_for_load_state("networkidle")
             _logger.info("Clicked Accept button on chapter page")
         except Exception:
             _logger.debug("No warning button found on chapter page, continuing...")
 
         # Wait for chapter images to be present
-        await page.wait_for_selector("div.chapter-image", timeout=20000)
+        await page.wait_for_selector("div.chapter-image", timeout=15000)
 
         image_divs = await page.query_selector_all("div.chapter-image")
-
-        # Wait for images to lazy-load
-        for i in range(10):
-            all_loaded = True
-            for div in image_divs:
-                img_url = await div.get_attribute("data-src")
-                if not img_url:
-                    img_tag = await div.query_selector("img")
-                    if img_tag:
-                        img_url = await img_tag.get_attribute("src")
-                if not img_url:
-                    all_loaded = False
-                    break
-            if all_loaded:
-                break
-            await page.wait_for_timeout(1000)
         if not image_divs:
             raise ScraperError(f"Unable to locate page images for chapter {chapter.title}")
 

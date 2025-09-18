@@ -11,6 +11,7 @@ from playwright.async_api import Browser, BrowserContext, async_playwright
 
 from models import Chapter, Manga, Page
 from utils import (
+    DEFAULT_HEADERS,
     ManifestStore,
     build_chapter_directory,
     format_chapter_label,
@@ -72,10 +73,11 @@ class ImageDownloader:
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         for page, result in zip(pages, results):
-            if isinstance(result, Exception):
+            if isinstance(result, Path):
+                self._notify_page_completed(chapter, page, result)
+            elif isinstance(result, Exception):
                 self._notify_page_failed(chapter, page, result)
                 raise DownloadError(f"Page download failed for {page.url}") from result
-            self._notify_page_completed(chapter, page, result)
 
     async def _download_page_with_retry(
         self, page: Page, destination: Path, context: BrowserContext
@@ -158,7 +160,7 @@ class ChapterDownloader:
 
     async def __aenter__(self) -> "ChapterDownloader":
         self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(headless=True)
+        self._browser = await self._playwright.chromium.launch(headless=False)
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
@@ -177,10 +179,11 @@ class ChapterDownloader:
         if not chapter_list:
             return
 
+        if not self._browser:
+            raise DownloadError("Browser is not initialized.")
         context = await self._browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36",
+            user_agent=DEFAULT_HEADERS["User-Agent"],
+            extra_http_headers=DEFAULT_HEADERS,
             viewport={"width": 1280, "height": 800},
         )
         try:
