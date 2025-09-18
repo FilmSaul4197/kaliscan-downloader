@@ -346,44 +346,63 @@ async def _run_download(
     backoff: float,
 ) -> List[Dict[str, Any]]:
     downloaded_chapters_info = []
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+        console=console,
+        transient=False,
+    )
+    chapter_tasks: Dict[str, TaskID] = {}
 
     def handle_progress(event: str, payload: Dict[str, object]) -> None:
         ch: Chapter = payload["chapter"]  # type: ignore
+        task_id = chapter_tasks.get(ch.id)
+
         if event == "chapter_started":
-            console.print(f"  -> Starting chapter: {_chapter_display_name(ch)}")
+            description = f"Chapter {ch.number:g}" if ch.number is not None else ch.title
+            total_pages = len(ch.pages) if ch.pages else 0
+            chapter_tasks[ch.id] = progress.add_task(description or ch.url, total=total_pages)
         elif event == "page_completed":
-            page: Page = payload["page"]  # type: ignore
-            console.print(f"    - Downloaded page {page.index}")
+            if task_id is not None:
+                progress.advance(task_id, 1)
         elif event == "chapter_completed":
-            console.print(f"  -> Finished chapter: {_chapter_display_name(ch)}")
+            if task_id is not None:
+                progress.update(task_id, completed=progress.tasks[task_id].total or 0)
             downloaded_chapters_info.append({"chapter": ch, "path": payload["destination"]})
         elif event == "chapter_failed":
-            typer.secho(f"  -> Failed chapter: {_chapter_display_name(ch)}", fg=typer.colors.RED)
+            if task_id is not None:
+                progress.stop_task(task_id)
+            typer.secho(f"Chapter failed: {ch.title}", fg=typer.colors.RED)
 
-    async with ChapterDownloader(
-        output_dir=output,
-        max_chapter_workers=chapter_workers,
-        max_image_workers=image_workers,
-        retries=retries,
-        backoff=backoff,
-        progress_callback=handle_progress,
-    ) as downloader:
-        # Stage 1: Scrape pages
-        console.print("[bold]Scraping page information...[/bold]")
-        async with downloader.get_browser_context() as context:
-            for chapter in chapters:
-                try:
-                    pages = await scrape_pages(chapter, context)
-                    chapter.pages = pages
-                except Exception as exc:
-                    typer.secho(f"Failed to scrape pages for {chapter.title}: {exc}", fg=typer.colors.RED)
-                    chapter.pages = []
+    with progress:
+        async with ChapterDownloader(
+            output_dir=output,
+            max_chapter_workers=chapter_workers,
+            max_image_workers=image_workers,
+            retries=retries,
+            backoff=backoff,
+            progress_callback=handle_progress,
+        ) as downloader:
+            # Stage 1: Scrape pages
+            scraping_task = progress.add_task("Scraping page information...", total=len(chapters))
+            async with downloader.get_browser_context() as context:
+                for chapter in chapters:
+                    try:
+                        pages = await scrape_pages(chapter, context)
+                        chapter.pages = pages
+                    except Exception as exc:
+                        typer.secho(f"Failed to scrape pages for {chapter.title}: {exc}", fg=typer.colors.RED)
+                        chapter.pages = []
+                    progress.advance(scraping_task)
+            progress.update(scraping_task, visible=False)
 
-        # Stage 2: Download
-        chapters_to_download = [ch for ch in chapters if ch.pages]
-        if chapters_to_download:
-            console.print("[bold]Downloading images...[/bold]")
-            await downloader.download(manga, chapters_to_download)
+            # Stage 2: Download
+            chapters_to_download = [ch for ch in chapters if ch.pages]
+            if chapters_to_download:
+                await downloader.download(manga, chapters_to_download)
 
     return downloaded_chapters_info
 
@@ -396,31 +415,45 @@ def _perform_conversion(
     cleanup: bool,
 ) -> None:
     console.print(f"\n[bold]Converting {len(downloaded_chapters)} chapter(s) to {format.upper()}[/bold]")
-    for item in downloaded_chapters:
-        chapter: Chapter = item["chapter"]
-        chapter_path: Path = item["path"]
-        
-        console.print(f"  -> Converting chapter: {_chapter_display_name(chapter)}")
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+        console=console,
+        transient=True,
+    ) as progress:
+        task = progress.add_task("Converting...", total=len(downloaded_chapters))
 
-        try:
-            image_files = get_image_files(chapter_path)
-            if not image_files:
-                console.print(f"[yellow]No images found for chapter {chapter.title}, skipping.[/yellow]")
-                continue
-
-            output_filename = f"{chapter_path.name}.{format}"
-            output_file = output_dir / manga.id / output_filename
+        for item in downloaded_chapters:
+            chapter: Chapter = item["chapter"]
+            chapter_path: Path = item["path"]
             
-            if format == "pdf":
-                convert_to_pdf(image_files, output_file)
-            elif format == "cbz":
-                convert_to_cbz(image_files, output_file)
+            progress.update(task, description=f"Converting chapter '{chapter.title}'")
 
-            if cleanup:
-                cleanup_images(image_files)
-                try:
-                    chapter_path.rmdir()
-                except OSError:
-                    pass
-        except (ConversionError, OSError) as exc:
-            console.print(f"[red]Error converting chapter {chapter.title}: {exc}[/red]")
+            try:
+                image_files = get_image_files(chapter_path)
+                if not image_files:
+                    console.print(f"[yellow]No images found for chapter {chapter.title}, skipping.[/yellow]")
+                    progress.advance(task)
+                    continue
+
+                output_filename = f"{chapter_path.name}.{format}"
+                output_file = output_dir / manga.id / output_filename
+                
+                if format == "pdf":
+                    convert_to_pdf(image_files, output_file)
+                elif format == "cbz":
+                    convert_to_cbz(image_files, output_file)
+
+                if cleanup:
+                    cleanup_images(image_files)
+                    try:
+                        chapter_path.rmdir()
+                    except OSError:
+                        pass
+            except (ConversionError, OSError) as exc:
+                console.print(f"[red]Error converting chapter {chapter.title}: {exc}[/red]")
+            
+            progress.advance(task)
