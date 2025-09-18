@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import zipfile
+from io import BytesIO
 from pathlib import Path
 from typing import List
 
@@ -24,11 +25,23 @@ def convert_to_pdf(image_files: List[Path], output_path: Path) -> None:
     if not image_files:
         raise ConversionError("No image files found to convert to PDF.")
 
-    # The img2pdf library can handle image paths directly.
-    # It also handles different image modes, so we don't need to convert them manually.
+    images_data = []
+    for image_path in image_files:
+        try:
+            with Image.open(image_path) as img:
+                # Convert to RGB to remove alpha channel, which img2pdf doesn't like.
+                if img.mode in ("RGBA", "LA"):
+                    img = img.convert("RGB")
+                # In-memory conversion
+                with BytesIO() as byte_io:
+                    img.save(byte_io, format='JPEG')
+                    images_data.append(byte_io.getvalue())
+        except Exception as e:
+            raise ConversionError(f"Failed to process image {image_path.name}: {e}") from e
+
     try:
         with open(output_path, "wb") as f:
-            pdf_bytes = img2pdf.convert(image_files)
+            pdf_bytes = img2pdf.convert(images_data)
             if pdf_bytes:
                 f.write(pdf_bytes)
     except Exception as e:
