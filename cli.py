@@ -389,14 +389,18 @@ async def _run_download(
             # Stage 1: Scrape pages
             scraping_task = progress.add_task("Scraping page information...", total=len(chapters))
             async with downloader.get_browser_context() as context:
-                for chapter in chapters:
-                    try:
-                        pages = await scrape_pages(chapter, context)
-                        chapter.pages = pages
-                    except Exception as exc:
-                        typer.secho(f"Failed to scrape pages for {chapter.title}: {exc}", fg=typer.colors.RED)
-                        chapter.pages = []
-                    progress.advance(scraping_task)
+                scrape_coroutines = [scrape_pages(ch, context) for ch in chapters]
+                results = await asyncio.gather(*scrape_coroutines, return_exceptions=True)
+
+            for i, result in enumerate(results):
+                chapter = chapters[i]
+                if isinstance(result, Exception):
+                    typer.secho(f"Failed to scrape pages for {chapter.title}: {result}", fg=typer.colors.RED)
+                    chapter.pages = []
+                else:
+                    if isinstance(result, list):
+                        chapter.pages = result
+                progress.advance(scraping_task)
             progress.update(scraping_task, visible=False)
 
             # Stage 2: Download
